@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>FANTACHOLI – Vibração</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{
+  margin:0;
+  font-family:Segoe UI;
+  background:linear-gradient(135deg,#0f172a,#1e293b);
+  color:#e2e8f0;
+}
+
+header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:15px 30px;
+}
+
+button{
+  padding:8px 16px;
+  margin-left:8px;
+  border-radius:8px;
+  border:none;
+  font-weight:600;
+  cursor:pointer;
+  background:#22c55e;
+  color:#000;
+}
+
+.container{
+  display:grid;
+  grid-template-columns:2fr 1fr;
+  gap:20px;
+  padding:20px 30px;
+  height:calc(100vh - 80px);
+}
+
+.card{
+  background:#1e293b;
+  border-radius:16px;
+  padding:20px;
+  box-shadow:0 0 20px rgba(34,197,94,0.15);
+}
+
+.big-number{
+  font-size:56px;
+  font-weight:bold;
+  color:#22c55e;
+}
+
+.axis{
+  display:flex;
+  justify-content:space-between;
+  margin-top:10px;
+  opacity:.8;
+}
+
+.status{
+  margin-top:8px;
+  font-weight:bold;
+  color:#f87171;
+}
+
+#chartWrapper{
+  height:320px;
+}
+
+.impact-counter{
+  margin-top:10px;
+  font-weight:bold;
+  color:#facc15;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h2>Monitoramento de Vibração</h2>
+  <div>
+    <button onclick="connect()">Conectar</button>
+    <button onclick="toggleRead()">Start / Stop</button>
+    <button onclick="exportCSV()">Export CSV</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <div>
+    <div class="card">
+      <div class="big-number" id="magnitude">0.00 g</div>
+
+      <div class="axis">
+        <div>X: <span id="xVal">0</span></div>
+        <div>Y: <span id="yVal">0</span></div>
+        <div>Z: <span id="zVal">0</span></div>
+      </div>
+
+      <div id="impact" class="status"></div>
+      <div class="impact-counter">
+        Impactos detectados: <span id="impactCount">0</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <div id="chartWrapper">
+        <canvas id="mainChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h4>Indicador Vetorial</h4>
+    <canvas id="vectorCanvas" width="260" height="260"></canvas>
+  </div>
+
+</div>
+
+<script>
+
+// ================= BLE =================
+
+let device, characteristic;
+let bleTimer=null;
+let renderTimer=null;
+let logData=[];
+let impactCount=0;
+
+const SERVICE_UUID='00000000-cc7a-482a-984a-7f2ed5b3e58f';
+const CHAR_UUID='00000001-cc7a-482a-984a-7f2ed5b3e58f';
+
+async function connect(){
+  device=await navigator.bluetooth.requestDevice({
+    acceptAllDevices:true,
+    optionalServices:[SERVICE_UUID]
+  });
+  const server=await device.gatt.connect();
+  const service=await server.getPrimaryService(SERVICE_UUID);
+  characteristic=await service.getCharacteristic(CHAR_UUID);
+}
+
+function toggleRead(){
+  if(bleTimer){
+    clearInterval(bleTimer);
+    clearInterval(renderTimer);
+    bleTimer=null;
+    renderTimer=null;
+  } else {
+    bleTimer=setInterval(readBLE,100);
+    renderTimer=setInterval(()=>chart.update('none'),250);
+  }
+}
+
+async function readBLE(){
+  const value=await characteristic.readValue();
+  const x=value.getInt16(0,true)*0.004;
+  const y=value.getInt16(2,true)*0.004;
+  const z=value.getInt16(4,true)*0.004;
+  updateUI(x,y,z);
+}
+
+// ================= CHART =================
+
+const ctx=document.getElementById('mainChart').getContext('2d');
+
+const chart=new Chart(ctx,{
+  type:'line',
+  data:{
+    labels:[],
+    datasets:[
+      {label:'X',data:[],borderColor:'#3b82f6',tension:0.3},
+      {label:'Y',data:[],borderColor:'#22c55e',tension:0.3},
+      {label:'Z',data:[],borderColor:'#ef4444',tension:0.3},
+      {label:'|A|',data:[],borderColor:'#facc15',borderWidth:2}
+    ]
+  },
+  options:{
+    animation:false,
+    responsive:true,
+    maintainAspectRatio:false,
+    plugins:{
+      legend:{
+        labels:{color:'#e2e8f0'}
+      }
+    },
+    scales:{
+      x:{display:false},
+      y:{min:-3,max:3}
+    }
+  }
+});
+
+// ================= UPDATE =================
+
+function updateUI(x,y,z){
+
+  const magnitude=Math.sqrt(x*x+y*y+z*z);
+  const impact = magnitude > 1.5 ? 1 : 0;
+
+  document.getElementById("xVal").innerText=x.toFixed(2);
+  document.getElementById("yVal").innerText=y.toFixed(2);
+  document.getElementById("zVal").innerText=z.toFixed(2);
+  document.getElementById("magnitude").innerText=magnitude.toFixed(2)+" g";
+
+  if(impact){
+    document.getElementById("impact").innerText="⚠ Impacto detectado";
+    impactCount++;
+    document.getElementById("impactCount").innerText=impactCount;
+  } else {
+    document.getElementById("impact").innerText="";
+  }
+
+  const t=new Date().toLocaleTimeString();
+
+  chart.data.labels.push(t);
+  chart.data.datasets[0].data.push(x);
+  chart.data.datasets[1].data.push(y);
+  chart.data.datasets[2].data.push(z);
+  chart.data.datasets[3].data.push(magnitude);
+
+  logData.push({x,y,z,magnitude,impact});
+
+  if(chart.data.labels.length>60){
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(d=>d.data.shift());
+  }
+
+  drawVector(x,y);
+}
+
+// ================= VECTOR =================
+
+function drawVector(x,y){
+  const canvas=document.getElementById("vectorCanvas");
+  const ctx=canvas.getContext("2d");
+  ctx.clearRect(0,0,260,260);
+
+  ctx.beginPath();
+  ctx.moveTo(130,130);
+  ctx.lineTo(130+x*40,130-y*40);
+  ctx.strokeStyle="#22c55e";
+  ctx.lineWidth=3;
+  ctx.stroke();
+}
+
+// ================= EXPORT =================
+
+function exportCSV(){
+  let csv="X,Y,Z,Modulo,Impacto\n";
+  logData.forEach(d=>{
+    csv+=`${d.x},${d.y},${d.z},${d.magnitude},${d.impact}\n`;
+  });
+
+  const blob=new Blob([csv],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="vibracao.csv";
+  a.click();
+}
+
+</script>
+</body>
+</html>
